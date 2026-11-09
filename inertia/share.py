@@ -1,21 +1,29 @@
-__all__ = ['share']
+from typing import Any
+
+from django.http import HttpRequest
+
+__all__ = ["share"]
+
 
 class InertiaShare:
-  def __init__(self):
-    self.props = {}
+    def __init__(self) -> None:
+        self.props: dict[str, Any] = {}
 
-  def set(self, **kwargs):
-    self.props = {
-      **self.props,
-      **kwargs,
-    }
+    def set(self, **kwargs: Any) -> None:
+        self.props = {
+            **self.props,
+            **kwargs,
+        }
 
-  def all(self):
-    return self.props
+    def all(self) -> dict[str, Any]:
+        return self.props
+
+    def keys(self) -> list[str]:
+        return list(self.props)
 
 
-def share(request, **kwargs):
-  if not hasattr(request, 'inertia'):
-    request.inertia = InertiaShare()
+def share(request: HttpRequest, **kwargs: Any) -> None:
+    if not hasattr(request, "inertia"):
+        request.inertia = InertiaShare()  # type: ignore[attr-defined]
 
-  request.inertia.set(**kwargs)
+    request.inertia.set(**kwargs)  # type: ignore[attr-defined]

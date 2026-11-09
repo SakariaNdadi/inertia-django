@@ -1,18 +1,21 @@
 ![image](https://user-images.githubusercontent.com/6599653/114456558-032e2200-9bab-11eb-88bc-a19897f417ba.png)
 
-
 # Inertia.js Django Adapter
+
+[Official Docs and installation instructions are available here](https://inertiajs.github.io/inertia-django/)
 
 ## Installation
 
 ### Backend
 
 Install the following python package via pip
+
 ```bash
 pip install inertia-django
 ```
 
 Add the Inertia app to your `INSTALLED_APPS` in `settings.py`
+
 ```python
 INSTALLED_APPS = [
   # django apps,
@@ -22,6 +25,7 @@ INSTALLED_APPS = [
 ```
 
 Add the Inertia middleware to your `MIDDLEWARE` in `settings.py`
+
 ```python
 MIDDLEWARE = [
   # django middleware,
@@ -36,31 +40,31 @@ Now you're all set!
 
 ### Frontend
 
-Django specific frontend docs coming soon. For now, we recommend installing [django_vite](https://github.com/MrBin99/django-vite) 
+Django specific frontend docs coming soon. For now, we recommend installing [django_vite](https://github.com/MrBin99/django-vite)
 and following the commits on the Django Vite [example repo](https://github.com/MrBin99/django-vite-example). Once Vite is setup with
 your frontend of choice, just replace the contents of `entry.js` with [this file (example in react)](https://github.com/BrandonShar/inertia-rails-template/blob/main/app/frontend/entrypoints/application.jsx)
 
-
-You can also check out the official Inertia docs at https://inertiajs.com/. 
+You can also check out the official Inertia docs at https://inertiajs.com/.
 
 ### CSRF
 
-Django's CSRF tokens are tightly coupled with rendering templates so Inertia Django automatically handles adding the CSRF cookie for you to each Inertia response. Because the default names Django users for the CSRF headers don't match Axios (the Javascript request library Inertia uses), we'll need to either modify Axios's defaults OR Django's settings. 
+Django's CSRF tokens are tightly coupled with rendering templates, so Inertia Django automatically handles adding the CSRF cookie to every response — including non-visit XHR requests made via the `useHttp` hook introduced in Inertia v3.
 
-**You only need to choose one of the following options, just pick whichever makes the most sense to you!**
+The Inertia v3 HTTP client defaults to Laravel's `XSRF-TOKEN` cookie and `X-XSRF-TOKEN` header, while Django defaults to `csrftoken` and `X-CSRFToken`. Configure the client with Django's names (or use your project's custom CSRF names):
 
-In your `entry.js` file
 ```javascript
-axios.defaults.xsrfHeaderName = "X-CSRFToken"
-axios.defaults.xsrfCookieName = "csrftoken"
+createInertiaApp({
+  // ...
+  http: {
+    xsrfCookieName: 'csrftoken',
+    xsrfHeaderName: 'X-CSRFToken',
+  },
+})
 ```
-OR
 
-In your Django `settings.py` file
-```python
-CSRF_HEADER_NAME = 'HTTP_X_XSRF_TOKEN'
-CSRF_COOKIE_NAME = 'XSRF-TOKEN'
-```
+## Upgrading to Inertia v3
+
+See the [Inertia v3 upgrade guide](docs/guide/upgrading-to-v3.md) for the required client, template, partial reload, flash, redirect, and cache changes.
 
 ## Usage
 
@@ -91,6 +95,22 @@ def index(request):
   }
 ```
 
+If you need more control, you can also directly return the InertiaResponse class. It has the same arguments as the render method and subclasses HttpResponse to accept of all its arguments as well.
+
+```python
+from inertia import InertiaResponse
+from .models import Event
+
+def index(request):
+  return InertiaResponse(
+    request,
+    'Event/Index',
+    props={
+      'events': Event.objects.all()
+    }
+  )
+```
+
 ### Shared Data
 
 If you have data that you want to be provided as a prop to every component (a common use-case is information about the authenticated user) you can use the `share` method. A common place to put this would be in some custom middleware.
@@ -102,7 +122,7 @@ from .models import User
 
 def inertia_share(get_response):
   def middleware(request):
-    share(request, 
+    share(request,
       app_name=settings.APP_NAME,
       user_count=lambda: User.objects.count(), # evaluated lazily at render time
       user=lambda: request.user, # evaluated lazily at render time
@@ -112,9 +132,34 @@ def inertia_share(get_response):
   return middleware
 ```
 
+### Prop Serialization
+
+Unlike Rails and Laravel, Django does not handle converting objects to JSON by default so Inertia Django offers two different ways to handle prop serialization.
+
+#### InertiaJsonEncoder
+
+The default behavior is via the InertiaJsonEncoder. The InertiaJsonEncoder is a barebones implementation
+that extends the DjangoJSONEncoder with the ability to handle QuerySets and models. Models are JSON encoded
+via Django's `model_to_dict` method excluding the field `password`. This method has limitations though, as
+`model_to_dict` does not include fields where editable=False (such as automatic timestamps).
+
+#### InertiaMeta
+
+Starting in Inertia Django v1.2, Inertia Django supports an InertiaMeta nested class. Similar to Django Rest Framework's serializers, any class (not just models) can contain an InertiaMeta class which can specify how that class should be serialized to JSON. At this time, in only supports `fields`, but this may be extended in future versions.
+
+```python
+class User(models.Model):
+  name = models.CharField(max_length=255)
+  password = models.CharField(max_length=255)
+  created_at = models.DateField(auto_now_add=True)
+
+  class InertiaMeta:
+    fields = ('name', 'created_at')
+```
+
 ### External Redirects
 
-It is possible to redirect to an external website, or even another non-Inertia endpoint in your app while handling an Inertia request. 
+It is possible to redirect to an external website, or even another non-Inertia endpoint in your app while handling an Inertia request.
 This can be accomplished using a server-side initiated `window.location` visit via the `location` method:
 
 ```python
@@ -124,37 +169,250 @@ def external():
     return location("http://foobar.com/")
 ```
 
-It will generate a `409 Conflict` response and include the destination URL in the `X-Inertia-Location` header. 
+It will generate a `409 Conflict` response and include the destination URL in the `X-Inertia-Location` header.
 When this response is received client-side, Inertia will automatically perform a `window.location = url` visit.
 
-### Lazy Props
+### Optional Props
+
 On the front end, Inertia supports the concept of "partial reloads" where only the props requested
-are returned by the server. Sometimes, you may want to use this flow to avoid processing a particularly slow prop on the intial load. In this case, you can use `Lazy props`. Lazy props aren't evaluated unless they're specifically requested by name in a partial reload.
+are returned by the server. Sometimes, you may want to use this flow to avoid processing a particularly slow prop on the intial load. In this case, you can use `Optional props`. Optional props aren't evaluated unless they're specifically requested by name in a partial reload.
 
 ```python
-from inertia import lazy, inertia
+from inertia import optional, inertia
 
 @inertia('ExampleComponent')
 def example(request):
   return {
     'name': lambda: 'Brandon', # this will be rendered on the first load as usual
-    'data': lazy(lambda: some_long_calculation()), # this will only be run when specifically requested by partial props and WILL NOT be included on the initial load
+    'data': optional(lambda: some_long_calculation()), # this will only be run when specifically requested by partial props and WILL NOT be included on the initial load
   }
 ```
 
+Use `always()` for data that must be included even when the client requests a different subset of props:
+
+```python
+from inertia import always
+
+return {
+  'currentUser': always(lambda: request.user.username),
+  'reports': optional(load_reports),
+}
+```
+
+### Deferred Props
+
+As of version 2.0, Inertia supports the ability to defer the fetching of props until after the page has been initially rendered. Essentially this is similar to the concept of `Optional props` however Inertia provides convenient frontend components to automatically fetch the deferred props after the page has initially loaded, instead of requiring the user to initiate a reload. For more info, see [Deferred props](https://inertiajs.com/deferred-props) in the Inertia documentation.
+
+To mark props as deferred on the server side use the `defer` function.
+
+```python
+from inertia import defer, inertia
+
+@inertia('ExampleComponent')
+def example(request):
+  return {
+    'name': lambda: 'Brandon', # this will be rendered on the first load as usual
+    'data': defer(lambda: some_long_calculation()), # this will only be run after the frontend has initially loaded and inertia requests this prop
+  }
+```
+
+#### Grouping requests
+
+By default, all deferred props get fetched in one request after the initial page is rendered, but you can choose to fetch data in parallel by grouping props together.
+
+```python
+from inertia import defer, inertia
+
+@inertia('ExampleComponent')
+def example(request):
+  return {
+    'name': lambda: 'Brandon', # this will be rendered on the first load as usual
+    'data': defer(lambda: some_long_calculation()),
+    'data1': defer(lambda: some_long_calculation1(), group='group'),
+    'data2': defer(lambda: some_long_calculation1(), 'group'),
+  }
+```
+
+In the example above, the `data1`, and `data2` props will be fetched in one request, while the `data` prop will be fetched in a separate request in parallel. Group names are arbitrary strings and can be anything you choose.
+
+### Merge Props
+
+By default, Inertia overwrites props with the same name when reloading a page. However, there are instances, such as pagination or infinite scrolling, where that is not the desired behavior. In these cases, you can merge props instead of overwriting them.
+
+```python
+from inertia import merge, inertia
+
+@inertia('ExampleComponent')
+def example(request):
+  return {
+    'name': lambda: 'Brandon',
+    'data': merge(Paginator(objects, 3)),
+  }
+```
+
+You can also combine deferred props with mergeable props to defer the loading of the prop and ultimately mark it as mergeable once it's loaded.
+
+```python
+from inertia import defer, inertia
+
+@inertia('ExampleComponent')
+def example(request):
+  return {
+    'name': lambda: 'Brandon',
+    'data': defer(lambda: Paginator(objects, 3), merge=True),
+  }
+```
+
+For Inertia v3, `merge()` can target nested arrays and match incoming records by a stable key. `deep_merge()` merges nested objects and arrays recursively:
+
+```python
+from inertia import deep_merge, merge
+
+return {
+  'feed': merge(load_feed, append='items', match_on='items.id'),
+  'chat': deep_merge(load_chat, match_on='messages.id'),
+}
+```
+
+### Scroll Props
+
+`scroll()` adds the pagination metadata used by Inertia v3's infinite-scroll components. Pass `defer=True` to load its first page after the initial render.
+
+```python
+from inertia import scroll
+
+return {
+  'players': scroll(
+    load_players,
+    {'pageName': 'page', 'previousPage': None, 'nextPage': 2, 'currentPage': 1},
+    defer=True,
+  ),
+}
+```
+
+### Once Props
+
+Some data rarely changes, is expensive to compute, or is simply large. Rather than sending it on every response, you can use `once` props. Once props are resolved on the first visit and remembered by the client. On subsequent visits the server skips re-resolving them, saving both CPU and bandwidth.
+
+```python
+from inertia import once, inertia
+
+@inertia('ExampleComponent')
+def example(request):
+  return {
+    'name': lambda: 'Brandon',
+    'plans': once(lambda: Plan.objects.all()), # resolved once, then cached client-side
+  }
+```
+
+Pass `fresh=True` to force re-resolution on every request, regardless of whether the client already holds the value:
+
+```python
+@inertia('Billing/Plans')
+def plans(request):
+  return {
+    'plans': once(lambda: Plan.objects.all(), fresh=True),
+  }
+```
+
+Once props also work in shared data:
+
+```python
+share(request, countries=once(lambda: list(Country.objects.values('code', 'name'))))
+```
+
+### Flash Data
+
+Django messages are automatically exposed through the page object's top-level `flash.messages` field.
+
+```python
+from django.contrib import messages
+
+messages.success(request, 'Brandon scored!')
+return redirect('players:index')
+```
+
+### Preserve Fragment
+
+When a user visits a URL with a fragment (e.g. `/article/old-slug#section`) and the server redirects to a different URL, the fragment is normally lost. Call `preserve_fragment()` before returning the redirect to carry the fragment to the new URL:
+
+```python
+from django.shortcuts import redirect
+
+from inertia import preserve_fragment
+
+def rename_article(request, slug):
+    article = Article.objects.get(slug=slug)
+    article.slug = request.POST['new_slug']
+    article.save()
+    preserve_fragment(request)
+    return redirect('articles:show', slug=article.slug)
+```
+
+The client will navigate to `/article/new-slug#section` instead of `/article/new-slug`.
+
 ### Json Encoding
 
-Inertia Django ships with a custom JsonEncoder at `inertia.utils.InertiaJsonEncoder` that extends Django's 
-`DjangoJSONEncoder` with additional logic to handle encoding models and Querysets. If you have other json 
+Inertia Django ships with a custom JsonEncoder at `inertia.utils.InertiaJsonEncoder` that extends Django's
+`DjangoJSONEncoder` with additional logic to handle encoding models and Querysets. If you have other json
 encoding logic you'd prefer, you can set a new JsonEncoder via the settings.
 
-### SSR 
+### History Encryption
+
+Inertia.js supports [history encryption](https://inertiajs.com/history-encryption) to protect sensitive data in the browser's history state. This is useful when your pages contain sensitive information that shouldn't be stored in plain text in the browser's history. This feature requires HTTPS since it relies on `window.crypto.subtle` which is only available in secure contexts.
+
+You can enable history encryption globally via the `INERTIA_ENCRYPT_HISTORY` setting in your `settings.py`:
+
+```python
+INERTIA_ENCRYPT_HISTORY = True
+```
+
+For more granular control, you can enable encryption on specific views:
+
+```python
+from inertia import encrypt_history, inertia
+
+@inertia('TestComponent')
+def encrypt_history_test(request):
+    encrypt_history(request)
+    return {}
+
+# If you have INERTIA_ENCRYPT_HISTORY = True but want to disable encryption for specific views:
+@inertia('PublicComponent')
+def public_view(request):
+    encrypt_history(request, False)  # Explicitly disable encryption for this view
+    return {}
+```
+
+When users log out, you might want to clear the history to ensure no sensitive data can be accessed. You can do this by extending the logout view:
+
+```python
+from inertia import clear_history
+from django.contrib.auth import views as auth_views
+
+class LogoutView(auth_views.LogoutView):
+    def dispatch(self, request, *args, **kwargs):
+        response = super().dispatch(request, *args, **kwargs)
+        clear_history(request)
+        return response
+```
+
+### SSR
+
+The SSR is handled by a separate Node server. Your backend acts like a proxy, receiving requests from the frontend, calling the Node server (SSR server), and returning the rendered HTML to the frontend.
+
+Look at the [examples section](#examples) to see working examples of SSR with Django and React or Svelte.
 
 #### Backend
-Enable SSR via the `INERTIA_SSR_URL` and `INERTIA_SSR_ENABLED` settings
+
+* Ensure `requests` is installed, so inertia-django can do SSR requests.
+  * `requests` is configured as a dependency if you install the `[ssr]` extra,
+    e.g. `inertia-django[ssr]` in your requirements.
+* Enable SSR via the `INERTIA_SSR_URL` and `INERTIA_SSR_ENABLED` settings.
 
 #### Frontend
-Coming Soon!
+
+Follow the [current Inertiajs docs for setting up SSR](https://inertiajs.com/docs/v2/advanced/server-side-rendering).
 
 ## Settings
 
@@ -168,6 +426,7 @@ INERTIA_LAYOUT = 'layout.html' # required and has no default
 INERTIA_JSON_ENCODER = CustomJsonEncoder # defaults to inertia.utils.InertiaJsonEncoder
 INERTIA_SSR_URL = 'http://localhost:13714' # defaults to http://localhost:13714
 INERTIA_SSR_ENABLED = False # defaults to False
+INERTIA_ENCRYPT_HISTORY = False # defaults to False
 ```
 
 ## Testing
@@ -184,22 +443,22 @@ class ExampleTestCase(InertiaTestCase):
 
     # check the component
     self.assertComponentUsed('Event/Index')
-    
+
     # access the component name
     self.assertEqual(self.component(), 'Event/Index')
-    
+
     # props (including shared props)
     self.assertHasExactProps({name: 'Brandon', sport: 'hockey'})
     self.assertIncludesProps({sport: 'hockey'})
-    
+
     # access props
     self.assertEquals(self.props()['name'], 'Brandon')
-    
+
     # template data
     self.assertHasExactTemplateData({name: 'Brian', sport: 'basketball'})
     self.assertIncludesTemplateData({sport: 'basketball'})
-    
-    # access template data 
+
+    # access template data
     self.assertEquals(self.template_data()['name'], 'Brian')
 ```
 
@@ -209,11 +468,8 @@ for you to simulate an inertia response. You can access and use it just like the
 ## Examples
 
 - [Django Svelte Template](https://github.com/pmdevita/Django-Svelte-Template) - A Django template and example project demonstrating Inertia with Svelte and SSR.
+- [Django React](https://github.com/willianantunes/inertia-django-playground): A Django + React project including CRUD operations, form handling, authentication, deployment using Docker, SSR, and more.
 
 ## Thank you
 
 A huge thank you to the community members who have worked on InertiaJS for Django before us. Parts of this repo were particularly inspired by [Andres Vargas](https://github.com/zodman) and [Samuel Girardin](https://github.com/girardinsamuel). Additional thanks to Andres for the Pypi project.
-
-*Maintained and sponsored by the team at [bellaWatt](https://bellawatt.com/)*
-
-[![bellaWatt Logo](https://user-images.githubusercontent.com/6599653/114456832-5607d980-9bab-11eb-99c8-ab39867c384e.png)](https://bellawatt.com/)
